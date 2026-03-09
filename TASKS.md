@@ -47,21 +47,23 @@ MLX uses mlx-community safetensors. Config system handles any path.
   - **This is architectural, not a simple op patch**
   - See `memory/architecture-notes.md` for detailed analysis
 
-- [-] **T1.3** Research alternative ANE-compatible draft models:
-  - Need: same Qwen3.5 tokenizer (248K vocab) + standard transformer architecture
-  - Checking: Qwen3 (not 3.5), other small Qwen models, model surgery approaches
-  - Checking: ANEMLL's Qwen3.5 support status
+- [x] **T1.3** Research alternative ANE-compatible draft models: **NO VIABLE OPTION**
+  - Qwen3 (0.6B, 1.7B) uses standard transformer but tokenizer is INCOMPATIBLE (151K vs 248K)
+  - ALL Qwen3.5 sizes use hybrid Gated Delta Networks — no pure-transformer variant
+  - Layer extraction (full_attention only) is infeasible — hidden states depend on linear_attention
+  - ANEMLL has no Qwen3.5 support
+  - **Conclusion:** ANE draft requires either (a) switching target to Qwen3 family, or (b) custom coremltools converter
 
 ### 1B: GPU Fallback (ACTIVE — working path)
 
-- [-] **T1.4** `src/draft/engine.py` — DraftEngine with dual backend:
+- [x] **T1.4** `src/draft/engine.py` — DraftEngine with dual backend:
   - MLX (GPU) backend: loads via `mlx_lm.load()`, fully functional
   - Core ML (ANE) backend: stubbed, ready for when conversion is solved
   - `propose(context, k)` returns draft tokens + probability distributions
   - `predict_next()` for single token prediction
 
-- [ ] **T1.5** `tests/test_draft_engine.py`:
-  - Unit tests with mocked model
+- [x] **T1.5** `tests/test_draft_engine.py`:
+  - 24 unit tests with mocked model (all passing)
   - Integration test (marked slow) with real Qwen3.5-0.8B via MLX
 
 - [ ] **T1.6** `benchmarks/draft_benchmark.py`:
@@ -85,14 +87,16 @@ MLX uses mlx-community safetensors. Config system handles any path.
   - 39 tests passing, handles all numerical edge cases
   - Statistical correctness verified (chi-squared + KL divergence)
 
-- [-] **T2.5** `src/orchestrator/scheduler.py` — Main speculative decoding loop:
+- [x] **T2.5** `src/orchestrator/scheduler.py` — Main speculative decoding loop:
   - Draft → Verify → Accept/Reject → Bonus token → Cache rollback
   - Yields (tokens, stats) per round for streaming
   - Tracks acceptance rate, timing, tokens per round
+  - 42 unit tests passing
 
-- [-] **T2.6** `src/cli.py` — CLI entry point:
+- [x] **T2.6** `src/cli.py` — CLI entry point:
   - `--draft-model`, `--target-model`, `--prompt`, `--K`, `--max-tokens`
   - Streaming output, summary statistics
+  - Fallback stub engine if real draft not available
 
 - [ ] **T2.7** `tests/test_e2e.py` — End-to-end integration tests
 
@@ -137,23 +141,27 @@ These tasks activate when we find an ANE-compatible draft model:
 ## Parallelism Map
 
 ```
-Currently running in parallel:
-├── T1.3  Research ANE-compatible draft models
-├── T1.4  Build MLX draft engine (GPU fallback)
-└── T2.5 + T2.6  Orchestrator + CLI
+Completed:
+├── T1.3  Research ANE-compatible draft models — NO viable ANE draft for Qwen3.5
+├── T1.4  DraftEngine with MLX backend (24 tests)
+├── T1.5  Draft engine tests (done)
+├── T2.5  Scheduler (42 tests)
+└── T2.6  CLI entry point
 
 Next parallel batch:
-├── T1.5  Draft engine tests
-├── T2.7  E2E tests
-└── T2.8  Benchmarks
+├── T1.6  Draft benchmark (needs 0.8B model download)
+├── T2.7  E2E integration tests (needs both models)
+└── T2.8  Speculative vs baseline benchmarks
 ```
 
 ## Notes for Agents
 
 ### Key Technical Facts
 - Qwen3.5 ALL sizes use hybrid Gated Delta Networks (not standard transformer)
+- Qwen3 (0.6B, 1.7B, 4B) uses standard transformer but INCOMPATIBLE tokenizer (151K vs 248K)
 - Tokenizer: 248077 tokens (model embedding: 248320 padded)
 - Qwen2.5 tokenizer is INCOMPATIBLE with Qwen3.5 (151K vs 248K)
+- **No cross-family ANE draft model exists for Qwen3.5-27B target**
 - MLX operations are lazy — call `mx.eval()` for timing
 - Data between MLX ↔ Core ML goes through NumPy arrays
 - Config auto-detects hardware — don't hardcode chip/memory assumptions
