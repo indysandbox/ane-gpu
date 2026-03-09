@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(uv pip:*)",
-      "Bash(source:*)"
+      "Bash(source:*)",
+      "Bash(gh auth:*)",
+      "Bash(brew list:*)"
     ]
   }
 }

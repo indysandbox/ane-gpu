@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Models (large binary files)
+models/*.mlpackage
+models/*.mlmodelc
+models/*.gguf
+models/*.safetensors
+models/*.bin
+models/*.pt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Secrets and credentials
+.env
+*.pem
+*.key
+secrets/
+
+# Benchmark results (regenerated)
+benchmarks/results/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# HuggingFace cache (don't commit model downloads)
+*.cache/

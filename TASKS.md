@@ -1,284 +1,227 @@
 # Task Checklist
 
-Concrete tasks for Claude Code to execute, in order. Each task should be completable independently. Check off as you go.
+Tracks project progress. Each task is a self-contained unit of work. Dependencies are noted.
+Status: `[x]` = done, `[-]` = in progress, `[ ]` = not started, `[!]` = blocked.
 
 ---
 
 ## Phase 0: Setup and Validation
 
-- [ ] **T0.1** Create project directory structure as specified in README.md
-- [ ] **T0.2** Create `pyproject.toml` with project metadata and dependencies:
-  - `mlx>=0.22`
-  - `mlx-lm>=0.21`
-  - `coremltools>=8.0`
-  - `transformers>=4.46`
-  - `torch>=2.4`
-  - `numpy`
-  - `huggingface-hub`
-- [ ] **T0.3** Create `scripts/setup.sh`:
-  - Create venv
-  - Install dependencies
-  - Verify MLX GPU access
-  - Print system info (chip, memory, macOS version)
-- [ ] **T0.4** Write `src/utils/config.py`:
-  - Dataclass for all configuration (model paths, K, max_tokens, context_length, temperature, etc.)
-  - Load from YAML file or CLI args
-  - Sensible defaults for M4 Air 24GB
-- [ ] **T0.5** Write tokenizer compatibility checker (`scripts/check_tokenizers.py`):
-  - Accept two model names as args
-  - Load both tokenizers from HF
-  - Compare vocab size, vocab contents, special tokens
-  - Test encode/decode on 20+ diverse strings
-  - Print clear PASS/FAIL report
-  - Run it with: `Qwen/Qwen3.5-27B` vs `Qwen/Qwen3.5-0.8B` (and other candidates)
-- [ ] **T0.6** Write `benchmarks/baseline_mlx.py`:
-  - Load target model via `mlx_lm.load`
-  - Generate 200 tokens from 3 different prompts
-  - Measure and report: tokens/s (generation), time-to-first-token, peak memory
-  - Use `time.perf_counter()` for timing
-  - Use `mlx.core.metal.get_active_memory()` and `get_peak_memory()` for memory
-- [ ] **T0.7** Write `src/utils/memory.py`:
-  - Function to get current memory usage (Python process + MLX metal memory)
-  - Function to get system memory pressure (`memory_pressure` command or `psutil`)
-  - Warning system: alert when memory usage exceeds threshold (e.g., 22GB)
+- [x] **T0.1** Project directory structure created
+- [x] **T0.2** `pyproject.toml` with dependencies (mlx, mlx-lm, coremltools, transformers, torch, numpy)
+- [x] **T0.3** Python 3.12 venv with all deps installed and verified (MLX, CoreML, PyTorch all working)
+- [x] **T0.4** `src/utils/config.py` — hardware-agnostic config system with YAML support and auto-detection
+- [x] **T0.5** **GATE PASSED:** Tokenizer compatibility verified — Qwen3.5-0.8B and 27B share identical 248K tokenizer
+- [x] **T0.6** `src/utils/memory.py` — memory monitoring (Metal GPU + process RSS + system pressure)
+- [x] **T0.7** `.gitignore`, `config.example.yaml`, test suite (13 tests passing)
+- [-] **T0.8** Write `benchmarks/baseline_mlx.py`:
+  - Load target model (Qwen3.5-27B-4bit) via `mlx_lm.load`
+  - Generate 200 tokens from 3 prompts
+  - Measure: tokens/s, time-to-first-token, peak Metal memory
+  - This is the baseline all speculative numbers compare against
+  - **Note:** Model needs HuggingFace format for MLX. Local GGUF files won't work directly.
+    Use `mlx-community/Qwen3.5-27B-4bit` from HF, or convert GGUF → MLX format.
+- [ ] **T0.9** GitHub repo setup:
+  - Initialize fresh repo (NOT a fork of ANEMLL — see decision log below)
+  - Add MIT license, proper README for open source
+  - Ensure no secrets committed (.gitignore covers .env, credentials, etc.)
 
-**Decision gate after T0.5:** Determine which draft model to use based on tokenizer compatibility.
+### Decision Log
+
+**ANEMLL fork decision: NO.** ANEMLL is a single-model ANE inference pipeline. Our project
+orchestrates two models on two different compute units (ANE + GPU) for speculative decoding.
+Forking would add unnecessary baggage (Swift code, iOS targets, chunked execution).
+Instead, we reference ANEMLL's Qwen conversion techniques and potentially import as a dependency.
+
+**Model format:** Local models are GGUF (from LM Studio). Core ML needs HuggingFace/PyTorch
+format. MLX works best with mlx-community safetensors. We'll download HF models for both engines,
+but the config system supports pointing at any model path.
+
+**Python version:** Using 3.12 (not 3.14) because torch and coremltools don't have 3.14 wheels yet.
 
 ---
 
 ## Phase 1: Draft Model on ANE
 
-- [ ] **T1.1** Write `src/draft/convert.py`:
-  - Download draft model from HuggingFace
-  - Trace with `torch.jit.trace` at fixed sequence length (default 128)
-  - Convert with `coremltools`:
-    ```python
-    ct.convert(
-        traced_model,
-        convert_to="mlprogram",
-        compute_units=ct.ComputeUnit.CPU_AND_NE,
-        minimum_deployment_target=ct.target.macOS15,
-    )
-    ```
-  - Save to specified output path
-  - Handle errors gracefully with clear messages
-  - CLI: `python src/draft/convert.py --model MODEL_NAME --output PATH --seq-len 128`
+**Goal:** Get Qwen3.5-0.8B running on the Neural Engine via Core ML.
 
-- [ ] **T1.2** If conversion fails with unsupported ops, investigate:
-  - Check which ops are falling back to CPU/GPU
-  - Study `apple/ml-ane-transformers` for patterns:
-    - Replace `nn.Linear` → `nn.Conv2d(C_in, C_out, 1)`
-    - Reshape to (B, C, 1, S) layout
-  - Write an ANE-optimized model wrapper if needed
-  - Alternatively, investigate using ANEMLL's conversion pipeline
-  - Document which approach worked
+- [ ] **T1.1** Write `src/draft/convert.py` — HuggingFace → Core ML conversion:
+  - Download Qwen3.5-0.8B from HuggingFace (need PyTorch weights, not GGUF)
+  - Trace with `torch.jit.trace` at fixed sequence length (128)
+  - Convert with `coremltools.convert(compute_units=CPU_AND_NE, convert_to="mlprogram")`
+  - Save as `.mlpackage`
+  - CLI: `python src/draft/convert.py --model Qwen/Qwen3.5-0.8B --output models/draft.mlpackage`
+  - **Risk:** Conversion may fail on unsupported ops. See T1.2.
+
+- [ ] **T1.2** If T1.1 fails, apply ANE optimizations:
+  - Study `apple/ml-ane-transformers` patterns: Linear → Conv2d(1x1), NCHW layout
+  - Study ANEMLL's Qwen conversion code for RoPE / GQA handling
+  - Write ANE-optimized model wrapper if needed
+  - Alternatively, try ANEMLL's full conversion pipeline
+  - Document which approach worked and why
+  - **Depends on:** T1.1
 
 - [ ] **T1.3** Write `src/draft/engine.py` — `DraftEngine` class:
-  ```python
-  class DraftEngine:
-      def __init__(self, model_path: str, seq_len: int = 128):
-          """Load Core ML model."""
-      
-      def predict_next(self, input_ids: list[int]) -> tuple[int, np.ndarray]:
-          """Given token sequence, return (next_token, probability_distribution)."""
-      
-      def propose(self, context: list[int], k: int) -> tuple[list[int], list[np.ndarray]]:
-          """Autoregressively generate k draft tokens with their distributions."""
-      
-      def reset(self):
-          """Reset any internal state."""
-  ```
-  - Handle padding (input shorter than fixed seq_len)
-  - Handle truncation (input longer than seq_len — use last seq_len tokens)
-  - Return raw logits/probabilities, not just argmax tokens
+  - Load Core ML `.mlpackage` model
+  - `predict_next(input_ids) → (next_token, probability_distribution)`
+  - `propose(context, k) → (draft_tokens, draft_distributions)`
+  - Handle padding (input < fixed seq_len) and truncation (input > seq_len)
+  - Return full probability distributions (softmax of logits), not just argmax
+  - **Depends on:** T1.1 or T1.2 (need a converted model)
 
 - [ ] **T1.4** Write `tests/test_draft_engine.py`:
-  - Test: model loads without error
-  - Test: single token prediction produces valid distribution (sums to ~1.0)
-  - Test: propose(k=5) returns exactly 5 tokens with 5 distributions
-  - Test: output tokens are valid token IDs within vocab range
-  - Test: padding works correctly for short inputs
+  - Model loads without error
+  - Single prediction produces valid probability distribution (sums to ~1.0)
+  - `propose(k=5)` returns exactly 5 tokens with 5 distributions
+  - Token IDs are within vocab range (0–248076)
+  - Padding works for short inputs
+  - **Depends on:** T1.3
 
 - [ ] **T1.5** Write `benchmarks/draft_benchmark.py`:
-  - Measure draft model: tokens/s, latency per forward pass
-  - Run 100 predictions, report mean/median/p99
-  - Monitor which compute unit is being used (ANE vs CPU vs GPU)
-  - Use `coremltools` compute plan analysis or Xcode Instruments
-  - Compare: draft on ANE vs draft on GPU (via MLX) to quantify ANE benefit
+  - Measure: tokens/s, latency per forward pass (mean/median/p99)
+  - Run 100 predictions
+  - Verify ANE execution (not CPU/GPU fallback) via coremltools compute plan or Instruments
+  - Compare: ANE speed vs same model on GPU via MLX
+  - **Depends on:** T1.3
+  - **Gate:** Draft must be >100 tok/s on ANE to be beneficial for speculative decoding
 
 ---
 
 ## Phase 2: Speculative Decoding Pipeline
 
+**Goal:** Full end-to-end speculative decoding with draft on ANE and target on GPU.
+
 - [ ] **T2.1** Write `src/target/engine.py` — `TargetEngine` class:
-  ```python
-  class TargetEngine:
-      def __init__(self, model_name: str):
-          """Load MLX model."""
-      
-      def prefill(self, tokens: list[int]) -> KVCache:
-          """Process prompt tokens, return KV cache."""
-      
-      def verify(self, draft_tokens: list[int], cache: KVCache) -> list[np.ndarray]:
-          """Batched forward pass on draft tokens. Return per-position logits."""
-      
-      def decode_one(self, cache: KVCache) -> tuple[int, np.ndarray]:
-          """Standard single-token autoregressive decode (for bonus token)."""
-      
-      def truncate_cache(self, cache: KVCache, length: int) -> KVCache:
-          """Roll back KV cache to given sequence length."""
-  ```
-  - The `verify` method is the critical one — it must process K tokens in a single forward pass
-  - Must return full probability distributions (softmax of logits), not just top tokens
-  - KV cache truncation must be exact and correct
+  - Load model via `mlx_lm.load`
+  - `prefill(tokens) → KVCache` — process prompt
+  - `verify(draft_tokens, cache) → list[Distribution]` — batched verification (THE critical method)
+  - `truncate_cache(cache, length) → KVCache` — roll back after rejection
+  - Must return full probability distributions for rejection sampling
+  - Can be developed independently of draft engine
 
 - [ ] **T2.2** Write `tests/test_target_engine.py`:
-  - Test: model loads and generates text
-  - Test: prefill produces valid KV cache
-  - Test: verify(K tokens) returns K+1 distributions
-  - Test: truncate_cache works (verify output is same after truncate+re-forward)
-  - Test: decode_one produces valid token
+  - Model loads and generates text
+  - Prefill produces valid KV cache
+  - `verify(K tokens)` returns K+1 distributions
+  - Cache truncation is correct (re-forward after truncate matches)
+  - **Depends on:** T2.1
 
 - [ ] **T2.3** Write `src/orchestrator/sampling.py`:
-  ```python
-  def rejection_sample(
-      target_prob: np.ndarray,  # p(x) from target model at this position
-      draft_prob: np.ndarray,   # q(x) from draft model at this position
-      draft_token: int,         # The token the draft model proposed
-      temperature: float = 1.0,
-  ) -> tuple[bool, int]:
-      """
-      Returns (accepted, token).
-      If accepted=True, token=draft_token.
-      If accepted=False, token is sampled from residual distribution.
-      """
-  
-  def sample_from_distribution(
-      probs: np.ndarray,
-      temperature: float = 1.0,
-      top_p: float = 1.0,
-  ) -> int:
-      """Sample a token from a probability distribution with temperature/top-p."""
-  
-  def compute_residual_distribution(
-      target_dist: np.ndarray,
-      draft_dist: np.ndarray,
-  ) -> np.ndarray:
-      """Compute norm(max(0, p(x) - q(x))) for correction sampling."""
-  ```
-  - Handle numerical edge cases: division by zero, negative probabilities after subtraction
-  - Temperature scaling before rejection test
-  - Proper normalization of residual distribution
+  - `rejection_sample(target_prob, draft_prob, draft_token) → (accepted, token)`
+  - `compute_residual_distribution(target_dist, draft_dist) → distribution`
+  - `sample_from_distribution(probs, temperature, top_p) → token`
+  - Handle numerical edge cases: division by zero, negative residuals
+  - **No model dependencies — can be developed and tested with synthetic distributions**
 
 - [ ] **T2.4** Write `tests/test_sampling.py`:
-  - Test: if target_prob == draft_prob, acceptance rate should be ~100%
-  - Test: if distributions are very different, acceptance rate should be low
-  - Test: residual distribution is valid (non-negative, sums to 1)
-  - Test: over many samples, output distribution matches target distribution
-  - Statistical test with >10,000 samples
+  - Identical distributions → ~100% acceptance
+  - Very different distributions → low acceptance
+  - Residual distribution is valid (non-negative, sums to 1)
+  - Statistical test: over 10K samples, output matches target distribution
+  - **Depends on:** T2.3
 
-- [ ] **T2.5** Write `src/orchestrator/scheduler.py` — main speculative loop:
-  ```python
-  class SpeculativeScheduler:
-      def __init__(self, draft: DraftEngine, target: TargetEngine, k: int = 5):
-          ...
-      
-      def generate(
-          self,
-          prompt_tokens: list[int],
-          max_tokens: int = 200,
-          temperature: float = 1.0,
-          top_p: float = 1.0,
-      ) -> Generator[tuple[list[int], dict], None, None]:
-          """
-          Yields (new_tokens, stats) at each speculation round.
-          stats includes: num_proposed, num_accepted, draft_time, verify_time
-          """
-  ```
-  - Implement the full algorithm from ARCHITECTURE.md
-  - Track statistics: acceptance rate, tokens per round, timing per phase
-  - Handle EOS token properly (stop if draft or target produces EOS)
-  - Handle the "bonus token" case (all K accepted)
+- [ ] **T2.5** Write `src/orchestrator/scheduler.py` — main speculative decoding loop:
+  - Implements algorithm from ARCHITECTURE.md
+  - Yields `(new_tokens, stats)` per speculation round (streaming)
+  - Stats: num_proposed, num_accepted, draft_time_ms, verify_time_ms
+  - Handles EOS, bonus token (all K accepted), KV cache rollback
+  - **Depends on:** T1.3, T2.1, T2.3
 
-- [ ] **T2.6** Write `src/orchestrator/pipeline.py` — CLI entry point:
-  - Parse args: `--draft-model`, `--target-model`, `--prompt`, `--K`, `--max-tokens`, `--temperature`
-  - Load both engines
-  - Run generation with streaming output
-  - Print summary statistics at the end:
-    - Total tokens generated
-    - Wall-clock time
-    - Effective tokens/s
-    - Average acceptance rate
-    - Average tokens per speculation round
-    - Peak memory usage
+- [ ] **T2.6** Write `src/orchestrator/pipeline.py` / `src/cli.py` — CLI entry point:
+  - `--draft-model`, `--target-model`, `--prompt`, `--K`, `--max-tokens`, `--temperature`
+  - Streaming output, summary statistics after generation
+  - **Depends on:** T2.5
 
-- [ ] **T2.7** Write `tests/test_e2e.py`:
-  - End-to-end test with small models (can use tiny test models)
-  - Verify generated text is coherent
-  - Verify statistics are reasonable
-  - Verify no memory leaks over extended generation
+- [ ] **T2.7** Write `tests/test_e2e.py` — end-to-end integration tests:
+  - Full pipeline produces coherent text
+  - Statistics are reasonable (acceptance rate > 0)
+  - No memory leaks over extended generation
+  - **Depends on:** T2.6
 
-- [ ] **T2.8** Write `benchmarks/speculative.py`:
-  - Run same prompts as `baseline_mlx.py`
-  - Report all metrics
-  - Write `benchmarks/compare.py` to produce side-by-side comparison table
+- [ ] **T2.8** Write `benchmarks/speculative.py` + `benchmarks/compare.py`:
+  - Same prompts as baseline benchmark
+  - Side-by-side comparison: baseline MLX vs speculative
+  - **Depends on:** T0.8, T2.6
 
 ---
 
 ## Phase 3: Optimization
 
+**Goal:** Maximize speedup through parallelism and tuning.
+
 - [ ] **T3.1** Tune speculation length K:
-  - Benchmark K = 3, 4, 5, 6, 8 on a standard prompt set
-  - Find the K that maximizes effective tokens/s
-  - May vary by task type (code vs prose vs Q&A)
+  - Benchmark K = 3, 4, 5, 6, 8 on standard prompts
+  - Find optimal K for Qwen3.5 0.8B/27B pairing
+  - May vary by task type
 
-- [ ] **T3.2** Implement async draft pipeline:
-  - Draft engine runs on background thread
-  - While GPU verifies batch N, ANE drafts batch N+1 (assuming full acceptance)
+- [ ] **T3.2** Async draft pipeline (ANE + GPU in parallel):
+  - While GPU verifies batch N, ANE drafts batch N+1
+  - Threading with `queue.Queue` or `asyncio`
   - On rejection: discard speculative draft, re-sync
-  - Use `threading.Thread` + `queue.Queue` or `asyncio`
-  - Benchmark: parallel vs sequential speedup
+  - Benchmark parallel vs sequential
+  - **Depends on:** T2.5
 
-- [ ] **T3.3** Implement draft model KV caching:
+- [ ] **T3.3** Draft model KV caching on ANE:
   - Modify Core ML model to accept/output KV cache tensors
-  - This requires re-doing the conversion with explicit cache I/O
-  - Test: verify cached vs uncached produce identical output
-  - Benchmark: speedup from caching (should be significant for longer contexts)
+  - Requires re-conversion with explicit cache I/O
+  - Verify: cached output matches uncached
+  - Significant speedup for longer contexts
+  - **Depends on:** T1.1 or T1.2
 
 - [ ] **T3.4** Memory optimization:
-  - Profile memory at each stage with `src/utils/memory.py`
-  - Identify any unnecessary memory duplication
-  - Test with context lengths: 1K, 2K, 4K, 8K — find the limit
+  - Profile memory at each stage
+  - Test context lengths: 1K, 2K, 4K, 8K — find the limit
+  - Identify unnecessary memory duplication
 
-- [ ] **T3.5** Final benchmarks:
-  - Full comparison table: baseline MLX vs sequential speculative vs parallel speculative
-  - Metrics: tokens/s, time-to-first-token, peak memory, power (if measurable via `powermetrics`)
-  - Multiple prompt types: short Q&A, long-form writing, code generation
-  - Write up results in `RESULTS.md`
+- [ ] **T3.5** Final benchmarks and `RESULTS.md`:
+  - Full comparison: baseline vs sequential speculative vs parallel speculative
+  - Metrics: tokens/s, TTFT, peak memory, power (via `powermetrics`)
+  - Multiple prompt types: Q&A, long-form, code
 
 ---
 
-## Notes for Claude Code
+## Phase 4: Open Source Polish
 
-### Working with Core ML on macOS
-- `coremltools` requires macOS. If running in a Linux container, the conversion step must be done on the Mac directly.
-- Core ML models are directories (`.mlpackage`), not single files.
-- To check if a model runs on ANE, use `coremltools.models.MLModel.predict()` and monitor with Activity Monitor → GPU History and Xcode Instruments.
+- [ ] **T4.1** CLI tool (clean argparse/click interface, interactive chat mode)
+- [ ] **T4.2** Documentation (usage guide, benchmarks, troubleshooting)
+- [ ] **T4.3** Support for other model families (LLaMA, Gemma, etc.)
+- [ ] **T4.4** API server mode (OpenAI-compatible, like mlx_lm.server)
+- [ ] **T4.5** CI/CD (GitHub Actions for tests — macOS runner)
+- [ ] **T4.6** Contributing guide, issue templates, release process
 
-### Working with MLX
-- MLX operations are lazy — call `mx.eval()` to force computation when timing.
-- `mlx-lm` models download to `~/.cache/huggingface/`.
-- For the target model, `mlx_lm.load()` returns `(model, tokenizer)`.
-- KV cache in MLX is typically a list of `mlx_lm.models.cache.KVCache` objects, one per layer.
+---
 
-### Memory Monitoring
-- `mlx.core.metal.get_peak_memory()` — peak Metal (GPU) memory
-- `mlx.core.metal.get_active_memory()` — current Metal memory
-- `resource.getrusage(resource.RUSAGE_SELF).ru_maxrss` — Python process RSS
-- `subprocess.run(["memory_pressure"])` — system-wide memory pressure
+## Parallelism Map
 
-### Debugging Tips
-- If the draft model is slow, it's probably not running on ANE. Check with Instruments.
-- If acceptance rate is very low (<30%), tokenizer mismatch is the most likely cause.
-- If you get OOM, the first thing to try is reducing context length or target quantization.
-- `mlx.core.metal.clear_cache()` can help free up unused Metal memory.
+Tasks that can be worked on simultaneously:
+
+```
+T0.8 (baseline benchmark)  ─┐
+T1.1 (draft conversion)     ├── can run in parallel
+T2.1 (target engine)         │
+T2.3 (sampling math)        ─┘
+
+T1.3 (draft engine)     ── depends on T1.1
+T2.5 (scheduler)        ── depends on T1.3 + T2.1 + T2.3
+T2.6 (pipeline/CLI)     ── depends on T2.5
+```
+
+## Notes for Agents
+
+### Model Formats
+- **Draft (ANE):** Needs HuggingFace PyTorch format → Core ML `.mlpackage`. Download `Qwen/Qwen3.5-0.8B`.
+- **Target (GPU):** Needs MLX safetensors format. Use `mlx-community/Qwen3.5-27B-4bit` from HF.
+- **Local GGUF files** at `/Users/kenfink/.lmstudio/models/unsloth/` are for reference/comparison only.
+  Do NOT hard-code these paths. The config system handles model resolution.
+
+### Key Technical Notes
+- MLX operations are lazy — call `mx.eval()` to force computation when timing
+- Core ML models are directories (`.mlpackage`), not single files
+- KV cache in MLX: list of `mlx_lm.models.cache.KVCache` objects, one per layer
+- Data transfer between MLX and Core ML goes through NumPy arrays
+- ANE prefers: 4D tensors (B,C,1,S), Conv2d instead of Linear, FP16, static shapes
+
+### Debugging
+- Draft model slow → probably not on ANE. Check Xcode Instruments (green = ANE)
+- Low acceptance rate (<30%) → tokenizer mismatch (already verified: PASS)
+- OOM → reduce context length, drop to Q3 quantization, or `mx.metal.clear_cache()`

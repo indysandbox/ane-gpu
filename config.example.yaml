@@ -1,0 +1,27 @@
+# ANE-GPU Configuration Example
+# Copy to config.yaml and modify for your setup.
+
+draft:
+  # Draft model: runs on ANE via Core ML
+  # Can be a HuggingFace ID or local path
+  model_id: "Qwen/Qwen3.5-0.8B"
+  compute_unit: "CPU_AND_NE"    # Core ML compute unit: CPU_AND_NE, ALL, CPU_ONLY
+  ane_seq_len: 128              # Fixed sequence length for ANE compilation
+  max_seq_len: 2048
+  use_kv_cache: false           # Enable in Phase 3 for better performance
+
+target:
+  # Target model: runs on GPU via MLX
+  # Can be a HuggingFace ID, mlx-community model, or local path
+  model_id: "mlx-community/Qwen3.5-27B-4bit"
+  max_seq_len: 4096
+
+speculative:
+  k: 5                          # Draft tokens per speculation round (3-8 typical)
+  temperature: 1.0
+  top_p: 1.0
+  max_tokens: 200
+  # seed: 42                    # Uncomment for reproducible output
+
+models_dir: "models"
+log_level: "INFO"
